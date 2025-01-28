@@ -191,9 +191,8 @@ elif page == "Schedule":
     else:
         st.error("Please log in first.")
 elif page == "About":
+    st.title("About This Application")
     if st.session_state.authenticated:
-        st.title("About This Application")
-
         st.write(
             """
             **GradeLens** serves as your complete academic management system which helps students effectively organize their academic activities and track school life effectively.
