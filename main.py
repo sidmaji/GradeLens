@@ -165,51 +165,60 @@ elif page == "GPA & Class Information":
 
 elif page == "Schedule":
     st.title("Student Schedule")
+    if st.session_state.authenticated:
+        # Fetch data from the API
+        schedule_data = fetch_schedule(
+            st.session_state.username, st.session_state.password
+        )
 
-    # Fetch data from the API
-    schedule_data = fetch_schedule(st.session_state.username, st.session_state.password)
+        if schedule_data and "studentSchedule" in schedule_data:
+            student_schedule = schedule_data["studentSchedule"]
 
-    if schedule_data and "studentSchedule" in schedule_data:
-        student_schedule = schedule_data["studentSchedule"]
-
-        # Display the schedule
-        for course in student_schedule:
-            with st.expander(course.get("courseName", "Unknown Course")):
-                # Display the selected fields with defaults
-                st.write(f"**Course Name:** {course.get('courseName', 'N/A')}")
-                st.write(f"**Teacher:** {course.get('teacher', 'N/A')}")
-                st.write(f"**Room:** {course.get('room', 'N/A')}")
-                st.write(f"**Marking Periods:** {course.get('markingPeriods', 'N/A')}")
-                st.write(f"**Periods:** {course.get('periods', 'N/A')}")
-                st.write(f"**Days:** {course.get('days', 'N/A')}")
+            # Display the schedule
+            for course in student_schedule:
+                with st.expander(course.get("courseName", "Unknown Course")):
+                    # Display the selected fields with defaults
+                    st.write(f"**Course Name:** {course.get('courseName', 'N/A')}")
+                    st.write(f"**Teacher:** {course.get('teacher', 'N/A')}")
+                    st.write(f"**Room:** {course.get('room', 'N/A')}")
+                    st.write(
+                        f"**Marking Periods:** {course.get('markingPeriods', 'N/A')}"
+                    )
+                    st.write(f"**Periods:** {course.get('periods', 'N/A')}")
+                    st.write(f"**Days:** {course.get('days', 'N/A')}")
+        else:
+            st.error("No schedule data available or failed to fetch data.")
     else:
-        st.error("No schedule data available or failed to fetch data.")
+        st.error("Please log in first.")
 elif page == "About":
-    st.title("About This Application")
+    if st.session_state.authenticated:
+        st.title("About This Application")
 
-    st.write(
-        """
-        **GradeLens** serves as your complete academic management system which helps students effectively organize their academic activities and track school life effectively.
-        **Features:**
-        - **Student Schedule**: View your class schedule with real-time data fetched from the Frisco ISD API. 
-        This includes details like course names, room assignments, teacher information, marking periods, and class days.
-        - **GPA Calculator**: Calculate your GPA by entering grades, course levels (on-level, advanced, AP), and using the appropriate weights for each class. 
-        This tool also allows you to separate first and second semesters and track your progress throughout the year.
-        - **Class Information**: Get detailed information about your classes, including course codes and names, so you can stay on top of assignments and class expectations.
+        st.write(
+            """
+            **GradeLens** serves as your complete academic management system which helps students effectively organize their academic activities and track school life effectively.
+            **Features:**
+            - **Student Schedule**: View your class schedule with real-time data fetched from the Frisco ISD API. 
+            This includes details like course names, room assignments, teacher information, marking periods, and class days.
+            - **GPA Calculator**: Calculate your GPA by entering grades, course levels (on-level, advanced, AP), and using the appropriate weights for each class. 
+            This tool also allows you to separate first and second semesters and track your progress throughout the year.
+            - **Class Information**: Get detailed information about your classes, including course codes and names, so you can stay on top of assignments and class expectations.
 
-        **How It Works:**
-        - Simply log in with your Frisco ISD credentials to fetch your schedule data and start using the tools provided.
-        - The GPA Calculator helps you calculate your GPA based on specific formulas and course weights.
-        - Easily navigate between your schedule, GPA, and class information all in one place.
+            **How It Works:**
+            - Simply log in with your Frisco ISD credentials to fetch your schedule data and start using the tools provided.
+            - The GPA Calculator helps you calculate your GPA based on specific formulas and course weights.
+            - Easily navigate between your schedule, GPA, and class information all in one place.
 
-        **Disclaimer:**
-        The information provided in this application is based on the data available through the Frisco ISD API. 
-        Schedule, GPA, and class information may change. The app is intended for informational purposes to help students stay organized.
+            **Disclaimer:**
+            The information provided in this application is based on the data available through the Frisco ISD API. 
+            Schedule, GPA, and class information may change. The app is intended for informational purposes to help students stay organized.
 
-        **Credits:**
-        - Developed by: Siddhant Maji
-        """
-    )
+            **Credits:**
+            - Developed by: Siddhant Maji
+            """
+        )
+    else:
+        st.error("Please log in first.")
 elif page == "Other Features":
     # Add functionality for future pages, like reports, settings, etc.
     st.header("Coming Soon!")
