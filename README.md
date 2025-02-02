@@ -4,5 +4,6 @@ A web app for tracking and analyzing your grades. Thanks to @SumitNalavade for t
 
 ## Setup
 1. Clone the repository:
-   git clone https://github.com/sidmaji/GradeLens.git
-   cd GradeLen
+    ```bash
+    git clone https://github.com/sidmaji/GradeLens.git
+    cd GradeLen
