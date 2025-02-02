@@ -1,224 +1,278 @@
+import os
 import requests
-import streamlit as st
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
+from bs4 import BeautifulSoup
+import lxml
 
-# Set up the page configuration
-st.set_page_config(
-    page_title="Student GPA Tracker",
-    page_icon="📚",
-    layout="centered",
-    initial_sidebar_state="auto",
-    menu_items={
-        "Get help": "mailto:siddhant.maji@gmail.com",
-        "Report a Bug": None,
-        "About": "Created by Siddhant Maji, this app helps students track their GPA and grades easily with data from Frisco ISD's Home Access Center.",
-    },
-)
+app = FastAPI()
+templates = Jinja2Templates(directory="templates")
 
+# Configuration
+HAC_BASE_URL = "https://hac.friscoisd.org"
 
-# Helper function to calculate GPA
-def calculate_weighted_gpa(class_names, class_grades):
+# Models
+class ClassData(BaseModel):
+    name: str
+    grade: float | None
+    assignments: list[dict]
+
+# Helper Functions
+def getRequestSession(username: str, password: str) -> requests.Session:
+    requestSession = requests.Session()
+
+    # Fetch the login page to get the verification token
+    loginScreenResponse = requestSession.get(
+        f"{HAC_BASE_URL}/HomeAccess/Account/LogOn?ReturnUrl=%2fHomeAccess%2f"
+    ).text
+
+    parser = BeautifulSoup(loginScreenResponse, "lxml")
+    requestVerificationToken = parser.find(
+        "input", attrs={"name": "__RequestVerificationToken"}
+    )["value"]
+
+    # Prepare headers and payload for login
+    requestHeaders = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1985.125 Safari/537.36",
+        "X-Requested-With": "XMLHttpRequest",
+        "Host": "hac.friscoisd.org",
+        "Origin": "hac.friscoisd.org",
+        "Referer": "https://hac.friscoisd.org/HomeAccess/Account/LogOn?ReturnUrl=%2fhomeaccess%2f",
+        "__RequestVerificationToken": requestVerificationToken,
+    }
+
+    requestPayload = {
+        "__RequestVerificationToken": requestVerificationToken,
+        "SCKTY00328510CustomEnabled": "False",
+        "SCKTY00436568CustomEnabled": "False",
+        "Database": "10",
+        "VerificationOption": "UsernamePassword",
+        "LogOnDetails.UserName": username,
+        "tempUN": "",
+        "tempPW": "",
+        "LogOnDetails.Password": password,
+    }
+
+    # Perform login
+    requestSession.post(
+        f"{HAC_BASE_URL}/HomeAccess/Account/LogOn?ReturnUrl=%2fHomeAccess%2f",
+        data=requestPayload,
+        headers=requestHeaders,
+    )
+
+    return requestSession
+
+def get_student_data(username: str, password: str) -> dict:
+    session = getRequestSession(username, password)
+
+    # Fetch registration page for student info
+    registration_page_content = session.get(
+        f"{HAC_BASE_URL}/HomeAccess/Content/Student/Registration.aspx"
+    ).text
+
+    registration_parser = BeautifulSoup(registration_page_content, "lxml")
+
+    student_info = {
+        "id": None,
+        "name": registration_parser.find(id="plnMain_lblRegStudentName").text,
+        "birthdate": registration_parser.find(id="plnMain_lblBirthDate").text,
+        "campus": registration_parser.find(id="plnMain_lblBuildingName").text,
+        "grade": registration_parser.find(id="plnMain_lblGrade").text,
+        "counselor": registration_parser.find(id="plnMain_lblCounselor").text,
+        "totalCredits": "0",
+    }
+
+    # Try to get the student ID, fallback to schedule page if necessary
     try:
-        total_weighted_grade = 0
-        max_weighted_grade = 0
-        classes_num = len(class_names)
+        student_info["id"] = registration_parser.find(id="plnMain_lblRegStudentID").text
+    except AttributeError:
+        schedule_page_content = session.get(
+            f"{HAC_BASE_URL}/HomeAccess/Content/Student/Classes.aspx"
+        ).text
+        schedule_parser = BeautifulSoup(schedule_page_content, "lxml")
+        student_info["id"] = schedule_parser.find(id="plnMain_lblRegStudentID").text
 
-        for i in range(classes_num):
-            if not class_grades[i]:
-                classes_num -= 1
-                i += 1
-            else:
-                grade = int(round(float(class_grades[i])))
-                class_name = class_names[i]
-                if (
-                    "AP" in class_name
-                    or "IB" in class_name
-                    or "Computer Sci 3 Adv" in class_name
-                ):
-                    total_weighted_grade += max(0, 6.0 - ((100 - grade) / 10))
-                    max_weighted_grade += 6.0
-                elif "Adv" in class_name:
-                    total_weighted_grade += max(0, 5.5 - ((100 - grade) / 10))
-                    max_weighted_grade += 5.5
-                else:
-                    total_weighted_grade += max(0, 5.0 - ((100 - grade) / 10))
-                    max_weighted_grade += 5.0
+    # Fetch assignments page for current classes
+    assignments_page_content = session.get(
+        f"{HAC_BASE_URL}/HomeAccess/Content/Student/Assignments.aspx"
+    ).text
 
-        weighted_gpa = round(total_weighted_grade / classes_num, 4)
-        max_weighted_gpa = round(max_weighted_grade / classes_num, 4)
-        return weighted_gpa, max_weighted_gpa
-    except Exception as e:
-        print(e)
-        return 0.000, 0.000
+    assignments_parser = BeautifulSoup(assignments_page_content, "lxml")
+    current_classes = []
+    course_containers = assignments_parser.find_all("div", "AssignmentClass")
 
+    for container in course_containers:
+        new_course = {"name": "", "grade": "", "lastUpdated": "", "assignments": []}
 
-# Fetch student data from APIs
-def fetch_student_info(username, password):
-    api_url = "https://friscoisdhacapi.vercel.app/api/info"
-    payload = {"username": username, "password": password}
-    response = requests.get(api_url, params=payload)
-    return response.json()
+        course_parser = BeautifulSoup(f"<html><body>{container}</body></html>", "lxml")
+        header_container = course_parser.find_all("div", "sg-header sg-header-square")
+        assignments_container = course_parser.find_all("div", "sg-content-grid")
 
-
-def fetch_schedule(username, password):
-    api_url = "https://friscoisdhacapi.vercel.app/api/schedule"
-    payload = {"username": username, "password": password}
-    response = requests.get(api_url, params=payload)
-    return response.json()
-
-
-def fetch_student_classes(username, password):
-    api_url = "https://friscoisdhacapi.vercel.app/api/currentclasses"
-    payload = {"username": username, "password": password}
-    response = requests.get(api_url, params=payload)
-    return response.json()
-
-
-# Streamlit App
-# st.title("Student GPA Tracker")
-
-# Sidebar Navigation
-page = st.sidebar.selectbox(
-    "Select a page",
-    [
-        "Login",
-        "GPA & Class Information",
-        "Schedule",
-        "About",
-        "Other Features",
-    ],  # Add more pages as you expand
-)
-
-if page == "Login":
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-
-    if not st.session_state.authenticated:
-        st.header("Login")
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        if st.button("Login"):
-            student_info = fetch_student_info(username, password)
-            if "name" in student_info:
-                st.session_state.authenticated = True
-                st.session_state.username = username
-                st.session_state.password = password
-                st.session_state.student_info = student_info
-                st.success(f"Welcome, {student_info['name']}!")
-            else:
-                st.error("Invalid credentials. Please try again.")
-    else:
-        st.success("Already logged in!")
-
-elif page == "GPA & Class Information":
-    st.title("GPA & Class Information")
-    if st.session_state.authenticated:
-        st.markdown("---")
-        with st.spinner(text="Fetching data..."):
-            st.header("Student Information")
-            student_info = st.session_state.student_info
-            st.write(f"**Name:** {student_info['name']}")
-            st.write(f"**Campus:** {student_info['campus']}")
-            st.write(f"**Grade Level:** {student_info['grade']}")
-
-            st.header("Class Information")
-            student_classes = fetch_student_classes(
-                st.session_state.username, st.session_state.password
+        for hc in header_container:
+            header_parser = BeautifulSoup(f"<html><body>{hc}</body></html>", "lxml")
+            new_course["name"] = header_parser.find(
+                "a", "sg-header-heading"
+            ).text.strip()
+            new_course["lastUpdated"] = (
+                header_parser.find("span", "sg-header-sub-heading")
+                .text.strip()
+                .replace("(Last Updated: ", "")
+                .replace(")", "")
             )
-            class_names = []
-            class_grades = []
-            class_assignments = []
+            new_course["grade"] = (
+                header_parser.find("span", "sg-header-heading sg-right")
+                .text.strip()
+                .replace("Student Grades ", "")
+                .replace("%", "")
+            )
 
-            if "currentClasses" in student_classes:
-                for c in student_classes["currentClasses"]:
-                    class_names.append(c["name"])
-                    class_grades.append(c["grade"])
-                    class_assignments.append(c["assignments"])
+        for ac in assignments_container:
+            assignments_parser = BeautifulSoup(
+                f"<html><body>{ac}</body></html>", "lxml"
+            )
+            rows = assignments_parser.find_all("tr", "sg-asp-table-data-row")
 
-                for i in range(len(class_names)):
-                    class_name = class_names[i]
-                    class_grade = class_grades[i]
-                    class_assignments_data = class_assignments[i]
-
-                    st.subheader(" ".join(class_name.split(" ")[3:]))
-                    st.write(f"**Grade:** {class_grade}")
-
-                    # Create an expander for assignments
-                    with st.expander("Assignments"):
-                        if class_assignments_data:
-                            for assignment in class_assignments_data:
-                                st.write(
-                                    f"- **{assignment['name']}**: {assignment['score']}/{assignment['totalPoints']}"
-                                )
-                        else:
-                            st.write("No assignments available")
-
-            weighted_gpa, max_gpa = calculate_weighted_gpa(class_names, class_grades)
-            st.header("GPA")
-            st.metric("Weighted GPA", f"{weighted_gpa:.4f}")
-            st.metric("Max Weighted GPA", f"{max_gpa:.4f}")
-
-            if st.button("Logout"):
-                st.session_state.clear()
-                st.success("You have been logged out.")
-    else:
-        st.error("Please log in first.")
-
-elif page == "Schedule":
-    st.title("Student Schedule")
-    if st.session_state.authenticated:
-        # Fetch data from the API
-        schedule_data = fetch_schedule(
-            st.session_state.username, st.session_state.password
-        )
-
-        if schedule_data and "studentSchedule" in schedule_data:
-            student_schedule = schedule_data["studentSchedule"]
-
-            # Display the schedule
-            for course in student_schedule:
-                with st.expander(course.get("courseName", "Unknown Course")):
-                    # Display the selected fields with defaults
-                    st.write(f"**Course Name:** {course.get('courseName', 'N/A')}")
-                    st.write(f"**Teacher:** {course.get('teacher', 'N/A')}")
-                    st.write(f"**Room:** {course.get('room', 'N/A')}")
-                    st.write(
-                        f"**Marking Periods:** {course.get('markingPeriods', 'N/A')}"
+            for assignment_container in rows:
+                try:
+                    assignment_parser = BeautifulSoup(
+                        f"<html><body>{assignment_container}</body></html>", "lxml"
                     )
-                    st.write(f"**Periods:** {course.get('periods', 'N/A')}")
-                    st.write(f"**Days:** {course.get('days', 'N/A')}")
+                    tds = assignment_parser.find_all("td")
+
+                    assignment_name = assignment_parser.find("a").text.strip()
+                    assignment_date_due = tds[0].text.strip()
+                    assignment_date_assigned = tds[1].text.strip()
+                    assignment_category = tds[3].text.strip()
+                    assignment_score = tds[4].text.strip()
+                    assignment_total_points = tds[5].text.strip()
+
+                    new_course["assignments"].append(
+                        {
+                            "name": assignment_name,
+                            "category": assignment_category,
+                            "dateAssigned": assignment_date_assigned,
+                            "dateDue": assignment_date_due,
+                            "score": assignment_score,
+                            "totalPoints": assignment_total_points,
+                        }
+                    )
+                except Exception:
+                    pass
+
+        current_classes.append(new_course)
+
+    # Fetch schedule page for student schedule
+    schedule_page_content = session.get(
+        f"{HAC_BASE_URL}/HomeAccess/Content/Student/Classes.aspx"
+    ).text
+
+    schedule_parser = BeautifulSoup(schedule_page_content, "lxml")
+    schedule = []
+
+    courses = schedule_parser.find_all("tr", "sg-asp-table-data-row")
+
+    for row in courses:
+        row_parser = BeautifulSoup(f"<html><body>{row}</body></html>", "lxml")
+        tds = [x.text.strip() for x in row_parser.find_all("td")]
+
+        if len(tds) > 3:
+            schedule.append(
+                {
+                    "building": tds[7],
+                    "courseCode": tds[0],
+                    "courseName": tds[1],
+                    "days": tds[5],
+                    "markingPeriods": tds[6],
+                    "periods": tds[2],
+                    "room": tds[4],
+                    "status": tds[8],
+                    "teacher": tds[3],
+                }
+            )
+
+    return {
+        "studentInfo": student_info,
+        "currentClasses": current_classes,
+        "studentSchedule": schedule,
+    }
+
+def calculate_weighted_gpa(
+    class_names: list[str], class_grades: list[float | None]
+) -> tuple[float, float]:
+    total_weighted_grade = 0.0
+    max_weighted_grade = 0.0
+    valid_classes = 0
+
+    for class_name, grade in zip(class_names, class_grades):
+        if grade is None:
+            continue
+
+        valid_classes += 1
+        grade = round(grade)
+
+        if (
+            "AP" in class_name
+            or "IB" in class_name
+            or "Computer Sci 3 Adv" in class_name
+        ):
+            total_weighted_grade += max(0, 6.0 - ((100 - grade) / 10))
+            max_weighted_grade += 6.0
+        elif "Adv" in class_name:
+            total_weighted_grade += max(0, 5.5 - ((100 - grade) / 10))
+            max_weighted_grade += 5.5
         else:
-            st.error("No schedule data available or failed to fetch data.")
-    else:
-        st.error("Please log in first.")
-elif page == "About":
-    st.title("About This Application")
-    if st.session_state.authenticated:
-        st.write(
-            """
-            **GradeLens** serves as your complete academic management system which helps students effectively organize their academic activities and track school life effectively.
-            **Features:**
-            - **Student Schedule**: View your class schedule with real-time data fetched from the Frisco ISD API. 
-            This includes details like course names, room assignments, teacher information, marking periods, and class days.
-            - **GPA Calculator**: Calculate your GPA by entering grades, course levels (on-level, advanced, AP), and using the appropriate weights for each class. 
-            This tool also allows you to separate first and second semesters and track your progress throughout the year.
-            - **Class Information**: Get detailed information about your classes, including course codes and names, so you can stay on top of assignments and class expectations.
+            total_weighted_grade += max(0, 5.0 - ((100 - grade) / 10))
+            max_weighted_grade += 5.0
 
-            **How It Works:**
-            - Simply log in with your Frisco ISD credentials to fetch your schedule data and start using the tools provided.
-            - The GPA Calculator helps you calculate your GPA based on specific formulas and course weights.
-            - Easily navigate between your schedule, GPA, and class information all in one place.
+    if valid_classes == 0:
+        return 0.0, 0.0
 
-            **Disclaimer:**
-            The information provided in this application is based on the data available through the Frisco ISD API. 
-            Schedule, GPA, and class information may change. The app is intended for informational purposes to help students stay organized.
+    weighted_gpa = round(total_weighted_grade / valid_classes, 4)
+    max_weighted_gpa = round(max_weighted_grade / valid_classes, 4)
+    return weighted_gpa, max_weighted_gpa
 
-            **Credits:**
-            - Developed by: Siddhant Maji
-            """
-        )
-    else:
-        st.error("Please log in first.")
-elif page == "Other Features":
-    # Add functionality for future pages, like reports, settings, etc.
-    st.header("Coming Soon!")
-    st.write("More features will be added here later.")
+# Routes
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    return templates.TemplateResponse(
+        "base.html", {"request": request, "content": "login.html"}
+    )
+
+@app.post("/login", response_class=HTMLResponse)
+async def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    try:
+        # Fetch all student data (info, current classes, and schedule)
+        student_data = get_student_data(username, password)
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid credentials or API error.")
+
+    class_data = [
+        {
+            "class_name": " ".join(c["name"].split(" ")[3:]),
+            "class_grade": float(c["grade"]) if c["grade"] else None,
+            "assignments": c["assignments"],
+        }
+        for c in student_data.get("currentClasses", [])
+    ]
+
+    weighted_gpa, max_gpa = calculate_weighted_gpa(
+        [c["class_name"] for c in class_data],
+        [c["class_grade"] for c in class_data],
+    )
+
+    return templates.TemplateResponse(
+        "base.html",
+        {
+            "request": request,
+            "content": "dashboard.html",
+            "name": username,
+            "gpa": weighted_gpa,
+            "max_gpa": max_gpa,
+            "classes": class_data,
+            "studentInfo": student_data.get("studentInfo", {}),  # Pass student info
+            "schedule": student_data.get("studentSchedule", []),  # Pass schedule data
+        },
+    )

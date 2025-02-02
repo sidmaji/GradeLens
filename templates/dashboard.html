@@ -1,0 +1,86 @@
+<div class="container-fluid p-0">
+    <div class="row">
+        <div class="col-12">
+            <div class="card shadow-lg p-4 mt-5">
+                <div class="card-body">
+                    <!-- Greet the student by their name -->
+                    <h2 class="text-center">🎓 Hey, {{ studentInfo.name }}!</h2>
+
+                    <!-- Display student information -->
+                    <div class="student-info mb-4">
+                        <p><strong>Student ID:</strong> {{ studentInfo.id }}</p>
+                        <p><strong>Birthdate:</strong> {{ studentInfo.birthdate }}</p>
+                        <p><strong>Campus:</strong> {{ studentInfo.campus }}</p>
+                        <p><strong>Grade:</strong> {{ studentInfo.grade }}</p>
+                        <p><strong>Counselor:</strong> {{ studentInfo.counselor }}</p>
+                    </div>
+
+                    <!-- Display GPA -->
+                    <h3 class="text-center">Your GPA</h3>
+                    <p class="text-center"><strong>Weighted GPA:</strong> {{ gpa }}</p>
+                    <p class="text-center"><strong>Max Weighted GPA:</strong> {{ max_gpa }}</p>
+
+                    <!-- Display current classes -->
+                    <h3 class="mt-4">📚 Current Classes</h3>
+                    <hr></hr>
+                    <div class="accordion" id="classesAccordion">
+                        {% for class in classes %}
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" data-bs-toggle="collapse"
+                                    data-bs-target="#class-{{ loop.index }}">
+                                    {{ class.class_name }} - Grade: {{ class.class_grade }}%
+                                </button>
+                            </h2>
+                            <div id="class-{{ loop.index }}" class="accordion-collapse collapse">
+                                <div class="accordion-body">
+                                    <h5>Assignments:</h5>
+                                    {% if class.assignments %}
+                                    <ul class="list-group">
+                                        {% for assignment in class.assignments %}
+                                        <li class="list-group-item d-flex justify-content-between">
+                                            <span>
+                                                {{ assignment['name'] }}<br>
+                                                <small>Category: {{ assignment['category'] }}</small><br>
+                                                <small>Assigned: {{ assignment['dateAssigned'] }}</small><br>
+                                                <small>Due: {{ assignment['dateDue'] }}</small>
+                                            </span>
+                                            <span class="
+                                                {% if assignment['score'] == '' or assignment['category'] != 'Assessment of Learning' %}
+                                                    text-secondary
+                                                {% else %}
+                                                    {% set score = assignment['score'] | float %}
+                                                    {% if score >= 90 %}
+                                                        text-success
+                                                    {% elif score >= 80 %}
+                                                        text-warning
+                                                    {% else %}
+                                                        text-danger
+                                                    {% endif %}
+                                                {% endif %}
+                                            ">
+                                                {% if assignment['score'] %}
+                                                {{ assignment['score'] }}/{{ assignment['totalPoints'] }}
+                                                {% else %}
+                                                Not Graded Yet
+                                                {% endif %}
+                                            </span>
+                                        </li>
+                                        {% endfor %}
+                                    </ul>
+                                    {% else %}
+                                    <p>No assignments available</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <!-- Logout button -->
+                    <button hx-get="/" hx-target="#main-content" class="btn btn-danger btn-custom mt-3">Logout</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
